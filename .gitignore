@@ -1,8 +1,26 @@
-.DS_Store
-/.build
-/Packages
-xcuserdata/
+# Swift / SPM
+.build/
+.swiftpm/
+Package.resolved
 DerivedData/
-.swiftpm/configuration/registries.json
-.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
+Packages/
+xcuserdata/
+*.xcodeproj/
+*.xcworkspace/
+
+# macOS
+.DS_Store
+**/.DS_Store
+*.swp
+*~
+._*
+
+# App bundles (build output)
+*.app/
+
+# Scratch / temp
+scratch/
+crop.py
+
+# Credentials
 .netrc
