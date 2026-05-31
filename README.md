@@ -23,3 +23,26 @@ This project uses Swift Package Manager.
 1. Clone the repository.
 2. Open the directory in Xcode or use `swift build` from the command line.
 3. Run the target.
+
+## Signed macOS Build
+
+Use the Xcode build script to create a signed app bundle:
+
+```sh
+./build-signed.sh --identity "Developer ID Application: Your Name (TEAMID)"
+```
+
+The script builds the package with the Xcode Swift toolchain, packages
+`dist/Tobisk Tag Editor.app`, signs it with the bundle identifier
+`de.tobisk.apps.tag-editor`, verifies the signature, and creates a zip archive.
+For a local-only ad-hoc build, use:
+
+```sh
+./build-signed.sh --identity -
+```
+
+To install the signed app into `/Applications` after building:
+
+```sh
+./build-signed.sh --identity "Developer ID Application: Your Name (TEAMID)" --install
+```

@@ -9,6 +9,7 @@ enum AppMode: String, CaseIterable {
 struct AudioTrack: Identifiable, Hashable {
     let id = UUID()
     var fileURL: URL
+    var codecDetails: AudioCodecDetails = .unknown
     
     var filename: String {
         fileURL.lastPathComponent
@@ -31,6 +32,26 @@ struct AudioTrack: Identifiable, Hashable {
     
     static func == (lhs: AudioTrack, rhs: AudioTrack) -> Bool {
         lhs.id == rhs.id
+    }
+}
+
+struct AudioCodecDetails: Hashable {
+    var channelDescription: String = "Unknown"
+    var bitrateMode: String = "Unknown"
+    var bitrateKbps: Int?
+    var sampleRateHz: Int?
+    
+    static let unknown = AudioCodecDetails()
+    
+    var bitrateDescription: String {
+        guard let bitrateKbps else { return "Unknown" }
+        return "\(bitrateKbps) kbit/s"
+    }
+    
+    var sampleRateDescription: String {
+        guard let sampleRateHz else { return "Unknown" }
+        let khz = Double(sampleRateHz) / 1000
+        return String(format: "%.1f kHz", khz)
     }
 }
 

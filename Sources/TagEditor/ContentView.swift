@@ -123,11 +123,13 @@ struct ContentView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     } else {
-                        Button(action: { viewModel.bake(rename: true) }) {
-                            Text("Bake & Rename")
+                        if viewModel.mode == .audiobook {
+                            Button(action: { viewModel.bake(rename: true) }) {
+                                Text("Bake & Rename")
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(viewModel.tracks.isEmpty)
                         }
-                        .buttonStyle(.bordered)
-                        .disabled(viewModel.tracks.isEmpty)
                         
                         Button(action: { viewModel.bake(rename: false) }) {
                             Text("Bake to Files")
@@ -232,9 +234,65 @@ struct GlobalMetadataSection: View {
                         LabeledRow(label: "Album", idTag: "Album", text: $viewModel.globalMetadata.albumTitle)
                         LabeledRow(label: "Album Artist", idTag: "Album Artist", text: $viewModel.globalMetadata.albumArtist)
                     }
+                    
+                    Divider()
+                    
+                    DownsampleAllControl(viewModel: viewModel)
                 }
             }
         }
+    }
+}
+
+struct DownsampleAllControl: View {
+    @ObservedObject var viewModel: AppViewModel
+    
+    var body: some View {
+        HStack(alignment: .top) {
+            Text("Downsample")
+                .frame(width: 80, alignment: .trailing)
+                .foregroundColor(.primary)
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Menu {
+                    Button("Keep original bitrate") {
+                        viewModel.targetBitrateKbps = nil
+                    }
+                    
+                    ForEach(viewModel.availableDownsampleBitrates, id: \.self) { bitrate in
+                        Button("\(bitrate) kbit/s") {
+                            viewModel.targetBitrateKbps = bitrate
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Text(selectedDownsampleTitle)
+                            .lineLimit(1)
+                        Spacer()
+                        Image(systemName: "chevron.down")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(width: 210, alignment: .leading)
+                }
+                .menuStyle(.button)
+                
+                Text(viewModel.downsampleHelpText)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+            }
+            
+            Spacer()
+        }
+        .disabled(viewModel.tracks.isEmpty || viewModel.bakingProgress != nil)
+    }
+    
+    private var selectedDownsampleTitle: String {
+        guard let bitrate = viewModel.targetBitrateKbps else {
+            return "Keep original bitrate"
+        }
+        return "\(bitrate) kbit/s"
     }
 }
 
@@ -265,6 +323,10 @@ struct TrackMetadataSection: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
+                    
+                    Divider()
+                    
+                    CodecDetailsView(details: track.codecDetails)
                     
                     Divider()
                     
@@ -304,12 +366,38 @@ struct TrackMetadataSection: View {
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.2), lineWidth: 1))
                 
             } else {
-                Text("Select a track to edit its properties.")
+                Text(viewModel.mode == .music ? "select a track to show all tags" : "Select a track to edit its properties.")
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding()
             }
         }
+    }
+}
+
+struct CodecDetailsView: View {
+    let details: AudioCodecDetails
+    
+    var body: some View {
+        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
+            GridRow {
+                Text("Channels")
+                    .foregroundColor(.secondary)
+                Text(details.channelDescription)
+            }
+            GridRow {
+                Text("Bitrate")
+                    .foregroundColor(.secondary)
+                Text("\(details.bitrateDescription) \(details.bitrateMode == "Unknown" ? "" : "(\(details.bitrateMode))")")
+            }
+            GridRow {
+                Text("Sample Rate")
+                    .foregroundColor(.secondary)
+                Text(details.sampleRateDescription)
+            }
+        }
+        .font(.caption)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

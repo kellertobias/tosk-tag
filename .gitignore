@@ -17,6 +17,7 @@ xcuserdata/
 
 # App bundles (build output)
 *.app/
+dist/
 
 # Scratch / temp
 scratch/
@@ -24,3 +25,4 @@ crop.py
 
 # Credentials
 .netrc
+.repoinfo

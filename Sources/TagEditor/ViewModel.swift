@@ -19,8 +19,14 @@ class AppViewModel: ObservableObject {
     @Published var selectedTrackID: UUID?
     @Published var loadingProgress: Double? = nil
     @Published var bakingProgress: Double? = nil
+    @Published var targetBitrateKbps: Int? = nil {
+        didSet {
+            validateTargetBitrate()
+        }
+    }
     @Published var errorMessage: String? = nil
     private var completedLoads: Int = 0
+    private let supportedDownsampleBitrates = [320, 256, 192, 160, 128, 96]
     
     // Audio playback
     @Published var playingTrackID: UUID? = nil
@@ -29,11 +35,39 @@ class AppViewModel: ObservableObject {
     
     private let tagEditor = ID3TagEditor()
     
+    var availableDownsampleBitrates: [Int] {
+        guard let lowestBitrate = lowestLoadedBitrateKbps else { return [] }
+        return supportedDownsampleBitrates.filter { $0 < lowestBitrate }
+    }
+    
+    var downsampleHelpText: String {
+        guard !tracks.isEmpty else {
+            return "Applies to all loaded MP3 files."
+        }
+        
+        guard let lowestBitrate = lowestLoadedBitrateKbps else {
+            return "Bitrate is unknown for at least one loaded MP3."
+        }
+        
+        let count = tracks.count == 1 ? "1 loaded MP3" : "\(tracks.count) loaded MP3s"
+        if availableDownsampleBitrates.isEmpty {
+            return "\(count). No lower preset is available below \(lowestBitrate) kbit/s."
+        }
+        return "\(count). Downsample applies to every loaded MP3."
+    }
+    
+    private var lowestLoadedBitrateKbps: Int? {
+        let bitrates = tracks.compactMap(\.codecDetails.bitrateKbps)
+        guard bitrates.count == tracks.count else { return nil }
+        return bitrates.min()
+    }
+    
     func clearAll() {
         stopPlayback()
         tracks.removeAll()
         globalMetadata = GlobalMetadata(genre: mode == .audiobook ? "Audiobook" : "")
         selectedTrackID = nil
+        targetBitrateKbps = nil
     }
     
     // MARK: - Audio Playback
@@ -97,12 +131,13 @@ class AppViewModel: ObservableObject {
                         return
                     }
                     
-                    // Parse ID3 on background thread
+                    // Parse file data on background thread.
                     let tagEditor = ID3TagEditor()
                     let tag = try? tagEditor.read(from: url.path)
+                    let codecDetails = MP3Analyzer.analyze(url: url)
                     
                     Task { @MainActor in
-                        self.addTrackWithParsedTag(from: url, tag: tag)
+                        self.addTrackWithParsedTag(from: url, tag: tag, codecDetails: codecDetails)
                         self.completedLoads += 1
                         self.loadingProgress = Double(self.completedLoads) / Double(totalItems)
                         self.checkLoadingFinished(total: totalItems)
@@ -117,13 +152,15 @@ class AppViewModel: ObservableObject {
         if self.completedLoads == total {
             self.loadingProgress = nil
             self.sortByExistingTrackNumbers()
+            self.validateTargetBitrate()
         }
     }
     
-    func addTrackWithParsedTag(from url: URL, tag: ID3Tag?) {
+    func addTrackWithParsedTag(from url: URL, tag: ID3Tag?, codecDetails: AudioCodecDetails = .unknown) {
         guard !tracks.contains(where: { $0.fileURL == url }) else { return }
         
         var track = AudioTrack(fileURL: url)
+        track.codecDetails = codecDetails
         track.trackTitle = url.deletingPathExtension().lastPathComponent
         track.trackNumber = tracks.count + 1
         
@@ -169,6 +206,7 @@ class AppViewModel: ObservableObject {
         }
         
         tracks.append(track)
+        validateTargetBitrate()
     }
     
 
@@ -219,10 +257,18 @@ class AppViewModel: ObservableObject {
     }
     
     func bake(rename: Bool = false) {
+        validateTargetBitrate()
+        
+        if let targetBitrateKbps, !canDownsampleAllTracks(to: targetBitrateKbps) {
+            errorMessage = "Choose a bitrate lower than every loaded MP3 before baking."
+            return
+        }
+        
         bakingProgress = 0.0
         let currentTracks = tracks
         let currentMode = mode
         let currentGlobal = globalMetadata
+        let targetBitrateKbps = targetBitrateKbps
         
         let maxNumber = currentTracks.map { $0.trackNumber }.max() ?? 0
         let padding = maxNumber >= 100 ? 3 : 2
@@ -260,9 +306,27 @@ class AppViewModel: ObservableObject {
                     }
                     
                     let tag = builder.build()
-                    var finalURL = track.fileURL
+                    let originalURL = track.fileURL
+                    var workingURL = originalURL
+                    var temporaryURL: URL?
                     
-                    try tagEditor.write(tag: tag, to: finalURL.path)
+                    if let targetBitrateKbps {
+                        guard originalURL.pathExtension.lowercased() == "mp3",
+                              let sourceBitrate = track.codecDetails.bitrateKbps,
+                              targetBitrateKbps < sourceBitrate else {
+                            throw AudioProcessingError.invalidDownsampleTarget(originalURL.lastPathComponent)
+                        }
+                        
+                        let tempName = ".\(originalURL.deletingPathExtension().lastPathComponent)-\(UUID().uuidString).mp3"
+                        let tempURL = originalURL.deletingLastPathComponent().appendingPathComponent(tempName)
+                        try AudioTranscoder.downsampleMP3(inputURL: originalURL, outputURL: tempURL, bitrateKbps: targetBitrateKbps)
+                        workingURL = tempURL
+                        temporaryURL = tempURL
+                    }
+                    
+                    try tagEditor.write(tag: tag, to: workingURL.path)
+                    
+                    var finalURL = originalURL
                     
                     if rename {
                         var cleanName = track.fileURL.deletingPathExtension().lastPathComponent
@@ -274,15 +338,31 @@ class AppViewModel: ObservableObject {
                         let newFilename = String(format: formatStr, track.trackNumber, cleanName)
                         let newURL = track.fileURL.deletingLastPathComponent().appendingPathComponent(newFilename)
                         
-                        if newURL != finalURL {
-                            try FileManager.default.moveItem(at: finalURL, to: newURL)
-                            finalURL = newURL
-                        }
+                        finalURL = newURL
                     }
+                    
+                    if let temporaryURL {
+                        if finalURL == originalURL {
+                            _ = try FileManager.default.replaceItemAt(originalURL, withItemAt: temporaryURL)
+                        } else {
+                            if FileManager.default.fileExists(atPath: finalURL.path) {
+                                throw AudioProcessingError.outputAlreadyExists(finalURL.lastPathComponent)
+                            }
+                            try FileManager.default.moveItem(at: temporaryURL, to: finalURL)
+                            try FileManager.default.removeItem(at: originalURL)
+                        }
+                    } else if finalURL != originalURL {
+                        try FileManager.default.moveItem(at: originalURL, to: finalURL)
+                    }
+                    
+                    let updatedCodecDetails = targetBitrateKbps == nil ? track.codecDetails : MP3Analyzer.analyze(url: finalURL)
                     
                     await MainActor.run {
                         if finalURL != track.fileURL, let realIndex = self.tracks.firstIndex(where: { $0.id == track.id }) {
                             self.tracks[realIndex].fileURL = finalURL
+                        }
+                        if targetBitrateKbps != nil, let realIndex = self.tracks.firstIndex(where: { $0.id == track.id }) {
+                            self.tracks[realIndex].codecDetails = updatedCodecDetails
                         }
                         self.bakingProgress = Double(index + 1) / Double(currentTracks.count)
                     }
@@ -296,6 +376,20 @@ class AppViewModel: ObservableObject {
             await MainActor.run {
                 self.bakingProgress = nil
             }
+        }
+    }
+    
+    private func validateTargetBitrate() {
+        guard let targetBitrateKbps else { return }
+        if !availableDownsampleBitrates.contains(targetBitrateKbps) {
+            self.targetBitrateKbps = nil
+        }
+    }
+    
+    private func canDownsampleAllTracks(to bitrateKbps: Int) -> Bool {
+        !tracks.isEmpty && tracks.allSatisfy { track in
+            track.fileURL.pathExtension.lowercased() == "mp3"
+                && track.codecDetails.bitrateKbps.map { bitrateKbps < $0 } == true
         }
     }
 }
