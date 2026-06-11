@@ -1,0 +1,433 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env}"
+
+PRODUCT_NAME="Tobisk Tag Editor"
+EXECUTABLE_NAME="TagEditor"
+APP_NAME="$PRODUCT_NAME.app"
+BUNDLE_ID="${BUNDLE_ID:-de.tobisk.apps.tag-editor}"
+VERSION="${VERSION:-1.2}"
+BUILD_NUMBER="${BUILD_NUMBER:-1}"
+MIN_OS="${MIN_OS:-13.0}"
+
+load_env_file() {
+  if [[ ! -f "$ENV_FILE" ]]; then
+    return
+  fi
+
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+}
+
+resolve_project_path() {
+  local value="$1"
+
+  if [[ "$value" = /* ]]; then
+    printf '%s\n' "$value"
+  else
+    printf '%s\n' "$ROOT_DIR/$value"
+  fi
+}
+
+load_env_file
+
+DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
+export DEVELOPER_DIR
+
+CLANG_MODULE_CACHE_PATH="$(resolve_project_path "${CLANG_MODULE_CACHE_PATH:-.build/module-cache}")"
+export CLANG_MODULE_CACHE_PATH
+
+RUN_DIR="$(resolve_project_path "${RUN_DIR:-.build/run}")"
+ARCHIVE_DIR="$(resolve_project_path "${ARCHIVE_DIR:-.build/archive}")"
+ARCHIVE_APP_PATH="$(resolve_project_path "${ARCHIVE_APP_PATH:-.build/archive/$APP_NAME}")"
+DISTRIBUTION_DIR="$(resolve_project_path "${DISTRIBUTION_DIR:-.build/distribute}")"
+DISTRIBUTION_APP_PATH="$(resolve_project_path "${DISTRIBUTION_APP_PATH:-.build/distribute/$APP_NAME}")"
+DISTRIBUTION_ZIP="$(resolve_project_path "${DISTRIBUTION_ZIP:-.build/distribute/TagEditor.zip}")"
+INSTALL_DIR="${INSTALL_DIR:-/Applications/Weitere}"
+CODE_SIGN_IDENTITY="${CODE_SIGN_IDENTITY:--}"
+DISTRIBUTION_CERTIFICATE="${DISTRIBUTION_CERTIFICATE:-Developer ID Application}"
+
+usage() {
+  cat <<USAGE
+Usage: ./build [setup|run|archive [install [path]]|install [path]|distribute|clean]
+
+Modes:
+  setup
+        Create .env from .env.example, check Xcode/build tools, and offer to
+        install the MP3 encoder used by downsampling.
+  run
+        Build Debug, package a local app bundle, sign it ad-hoc, and launch it.
+  archive
+        Build Release and package a signed app bundle at $ARCHIVE_APP_PATH.
+        Add "install [path]" to replace path/$APP_NAME from the archive.
+  install
+        Alias for "archive install". Optionally pass the install path.
+  distribute
+        Build Release, sign with Developer ID, optionally notarize when
+        notarization env vars are present, and create $DISTRIBUTION_ZIP.
+  clean
+        Remove generated build outputs.
+
+Environment:
+  ENV_FILE                  Dotenv file to load. Defaults to .env.
+  DEVELOPER_DIR             Xcode path. Defaults to /Applications/Xcode.app/Contents/Developer.
+  INSTALL_DIR               Install destination. Defaults to /Applications/Weitere.
+  CODE_SIGN_IDENTITY        Signing identity for run/archive. Defaults to ad-hoc "-".
+  DISTRIBUTION_CERTIFICATE  Developer ID identity for distribute.
+  NOTARY_KEYCHAIN_PROFILE   Optional notarytool keychain profile.
+  NOTARY_APPLE_ID           Optional Apple ID for notarization.
+  NOTARY_TEAM_ID            Optional team ID for notarization.
+  NOTARY_PASSWORD           Optional app-specific password for notarization.
+USAGE
+}
+
+mode="run"
+install_after_archive=false
+install_dir_override=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    setup|run|archive|distribute|clean)
+      mode="$1"
+      shift
+      ;;
+    install)
+      if [[ "$mode" == "archive" ]]; then
+        install_after_archive=true
+      else
+        mode="install"
+      fi
+      shift
+      if [[ $# -gt 0 && "$1" != -* ]]; then
+        install_dir_override="$1"
+        shift
+      fi
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "error: unknown argument: $1" >&2
+      usage >&2
+      exit 64
+      ;;
+  esac
+done
+
+expand_install_dir() {
+  local path="$1"
+
+  case "$path" in
+    "~")
+      printf '%s\n' "$HOME"
+      ;;
+    "~/"*)
+      printf '%s/%s\n' "$HOME" "${path#"~/"}"
+      ;;
+    *)
+      printf '%s\n' "$path"
+      ;;
+  esac
+}
+
+if [[ -n "$install_dir_override" ]]; then
+  INSTALL_DIR="$(expand_install_dir "$install_dir_override")"
+fi
+
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+prompt_yes_no() {
+  local prompt="$1"
+  local answer
+
+  printf '%s [y/N] ' "$prompt"
+  read -r answer
+  [[ "$answer" == "y" || "$answer" == "Y" || "$answer" == "yes" || "$answer" == "YES" ]]
+}
+
+create_env_file_if_missing() {
+  if [[ -f "$ENV_FILE" ]]; then
+    echo "Found $ENV_FILE"
+    return
+  fi
+
+  cp "$ROOT_DIR/.env.example" "$ENV_FILE"
+  echo "Created $ENV_FILE from .env.example"
+}
+
+run_setup() {
+  echo "$PRODUCT_NAME setup"
+  echo
+
+  create_env_file_if_missing
+
+  if [[ -d "$DEVELOPER_DIR" ]]; then
+    echo "OK: Xcode found at $DEVELOPER_DIR"
+  else
+    echo "MISSING: Xcode was not found at $DEVELOPER_DIR"
+    echo "Install Xcode from the Mac App Store, then run:"
+    echo "  sudo xcode-select -s /Applications/Xcode.app/Contents/Developer"
+  fi
+
+  if command_exists swift; then
+    swift --version || true
+  else
+    echo "MISSING: swift was not found."
+  fi
+
+  for tool in codesign ditto plutil; do
+    if command_exists "$tool"; then
+      echo "OK: $tool found at $(command -v "$tool")"
+    else
+      echo "MISSING: $tool was not found."
+    fi
+  done
+
+  if command_exists lame || command_exists ffmpeg; then
+    if command_exists lame; then
+      echo "OK: lame found at $(command -v lame)"
+    fi
+    if command_exists ffmpeg; then
+      echo "OK: ffmpeg found at $(command -v ffmpeg)"
+    fi
+  elif command_exists brew; then
+    if prompt_yes_no "Downsampling needs lame or ffmpeg. Install lame with Homebrew now?"; then
+      brew install lame
+    else
+      echo "Install later with: brew install lame"
+    fi
+  else
+    echo "MISSING: lame/ffmpeg and Homebrew were not found."
+    echo "Install Homebrew, then run: brew install lame"
+  fi
+
+  echo
+  echo "Next commands:"
+  echo "  ./build run"
+  echo "  ./build archive"
+  echo "  ./build archive install"
+  echo "  ./build distribute"
+}
+
+require_xcode() {
+  if [[ ! -d "$DEVELOPER_DIR" ]]; then
+    echo "error: Xcode was not found at $DEVELOPER_DIR" >&2
+    echo "Set DEVELOPER_DIR in $ENV_FILE or install full Xcode." >&2
+    exit 69
+  fi
+}
+
+swift_bin_path() {
+  local configuration="$1"
+
+  swift build -c "$configuration" --show-bin-path
+}
+
+build_swift() {
+  local configuration="$1"
+
+  require_xcode
+  swift build -c "$configuration"
+}
+
+write_info_plist() {
+  local app_path="$1"
+  local plist_path="$app_path/Contents/Info.plist"
+
+  cat > "$plist_path" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>$PRODUCT_NAME</string>
+    <key>CFBundleExecutable</key>
+    <string>$EXECUTABLE_NAME</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIdentifier</key>
+    <string>$BUNDLE_ID</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>$PRODUCT_NAME</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$VERSION</string>
+    <key>CFBundleVersion</key>
+    <string>$BUILD_NUMBER</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.music</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>$MIN_OS</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>
+PLIST
+}
+
+package_app() {
+  local configuration="$1"
+  local app_path="$2"
+  local signing_identity="$3"
+  local bin_path
+
+  bin_path="$(swift_bin_path "$configuration")/$EXECUTABLE_NAME"
+  if [[ ! -x "$bin_path" ]]; then
+    echo "error: built executable not found at $bin_path" >&2
+    exit 66
+  fi
+
+  rm -rf "$app_path"
+  mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources"
+  cp "$bin_path" "$app_path/Contents/MacOS/$EXECUTABLE_NAME"
+  chmod +x "$app_path/Contents/MacOS/$EXECUTABLE_NAME"
+
+  if [[ -f "$ROOT_DIR/AppIcon.icns" ]]; then
+    cp "$ROOT_DIR/AppIcon.icns" "$app_path/Contents/Resources/AppIcon.icns"
+  fi
+
+  write_info_plist "$app_path"
+  plutil -lint "$app_path/Contents/Info.plist" >/dev/null
+
+  codesign --force --deep --options runtime --sign "$signing_identity" "$app_path"
+  codesign --verify --deep --strict --verbose=2 "$app_path"
+}
+
+run_app() {
+  local app_path="$RUN_DIR/$APP_NAME"
+
+  build_swift debug
+  mkdir -p "$RUN_DIR"
+  package_app debug "$app_path" "$CODE_SIGN_IDENTITY"
+  open "$app_path"
+}
+
+archive_app() {
+  mkdir -p "$ARCHIVE_DIR"
+  build_swift release
+  package_app release "$ARCHIVE_APP_PATH" "$CODE_SIGN_IDENTITY"
+  echo "Archive app: $ARCHIVE_APP_PATH"
+}
+
+install_archived_app() {
+  local destination_app="$INSTALL_DIR/$APP_NAME"
+
+  if [[ ! -d "$ARCHIVE_APP_PATH" ]]; then
+    echo "error: archived app was not found at $ARCHIVE_APP_PATH" >&2
+    exit 66
+  fi
+
+  codesign --verify --deep --strict --verbose=2 "$ARCHIVE_APP_PATH"
+  mkdir -p "$INSTALL_DIR"
+  killall "$PRODUCT_NAME" 2>/dev/null || true
+  rm -rf "$destination_app"
+  ditto "$ARCHIVE_APP_PATH" "$destination_app"
+
+  if [[ -x "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister" ]]; then
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+      -f "$destination_app"
+  fi
+
+  echo "Installed $destination_app"
+}
+
+require_distribution_identity() {
+  if ! security find-identity -v -p codesigning | grep -F "$DISTRIBUTION_CERTIFICATE" >/dev/null; then
+    cat >&2 <<ERROR
+error: no '$DISTRIBUTION_CERTIFICATE' signing identity was found.
+
+Install a Developer ID Application certificate, or set DISTRIBUTION_CERTIFICATE
+in $ENV_FILE to the exact identity name.
+ERROR
+    exit 78
+  fi
+}
+
+notarization_is_configured() {
+  [[ -n "${NOTARY_KEYCHAIN_PROFILE:-}" ]] ||
+    [[ -n "${NOTARY_APPLE_ID:-}" && -n "${NOTARY_TEAM_ID:-}" && -n "${NOTARY_PASSWORD:-}" ]]
+}
+
+submit_for_notarization() {
+  local zip_path="$1"
+
+  if [[ -n "${NOTARY_KEYCHAIN_PROFILE:-}" ]]; then
+    xcrun notarytool submit "$zip_path" \
+      --keychain-profile "$NOTARY_KEYCHAIN_PROFILE" \
+      --wait
+  else
+    xcrun notarytool submit "$zip_path" \
+      --apple-id "$NOTARY_APPLE_ID" \
+      --team-id "$NOTARY_TEAM_ID" \
+      --password "$NOTARY_PASSWORD" \
+      --wait
+  fi
+}
+
+distribute_app() {
+  local notary_zip="$DISTRIBUTION_DIR/TagEditor-notary.zip"
+
+  require_distribution_identity
+  mkdir -p "$DISTRIBUTION_DIR"
+  build_swift release
+  package_app release "$DISTRIBUTION_APP_PATH" "$DISTRIBUTION_CERTIFICATE"
+
+  rm -f "$notary_zip" "$DISTRIBUTION_ZIP"
+  ditto -c -k --keepParent "$DISTRIBUTION_APP_PATH" "$notary_zip"
+
+  if notarization_is_configured; then
+    submit_for_notarization "$notary_zip"
+    xcrun stapler staple "$DISTRIBUTION_APP_PATH"
+    xcrun stapler validate "$DISTRIBUTION_APP_PATH"
+    spctl --assess --type execute --verbose=4 "$DISTRIBUTION_APP_PATH"
+  else
+    echo "Notarization skipped. Set NOTARY_KEYCHAIN_PROFILE or NOTARY_APPLE_ID/NOTARY_TEAM_ID/NOTARY_PASSWORD to enable it."
+  fi
+
+  ditto -c -k --keepParent "$DISTRIBUTION_APP_PATH" "$DISTRIBUTION_ZIP"
+  echo "Distribution app: $DISTRIBUTION_APP_PATH"
+  echo "Distribution zip: $DISTRIBUTION_ZIP"
+}
+
+clean_build_outputs() {
+  rm -rf "$RUN_DIR" "$ARCHIVE_DIR" "$DISTRIBUTION_DIR"
+  swift package clean
+  echo "Removed generated build outputs."
+}
+
+case "$mode" in
+  setup)
+    run_setup
+    ;;
+  run)
+    run_app
+    ;;
+  archive)
+    archive_app
+    if [[ "$install_after_archive" == true ]]; then
+      install_archived_app
+    fi
+    ;;
+  install)
+    archive_app
+    install_archived_app
+    ;;
+  distribute)
+    distribute_app
+    ;;
+  clean)
+    clean_build_outputs
+    ;;
+esac

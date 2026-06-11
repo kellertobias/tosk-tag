@@ -446,3 +446,115 @@ struct MusicFieldRow: View {
         }
     }
 }
+
+struct AboutWindowContent: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .center, spacing: 14) {
+                Image(nsImage: NSApplication.shared.applicationIconImage)
+                    .resizable()
+                    .frame(width: 64, height: 64)
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Tobisk Tag Editor")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                    
+                    Text(appVersionText)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            Text("Tobisk Tag Editor is a native macOS tool for arranging MP3 files and baking ID3 metadata.")
+                .font(.body)
+                .foregroundColor(.secondary)
+            
+            Divider()
+            
+            VStack(alignment: .leading, spacing: 12) {
+                Label("Licenses", systemImage: "doc.text")
+                    .font(.headline)
+                
+                AttributionRow(
+                    name: "ID3TagEditor",
+                    role: "Bundled Swift package used to read and write ID3 tags.",
+                    license: "MIT License",
+                    copyright: "Copyright (c) 2018 Fabrizio Duroni",
+                    url: URL(string: "https://github.com/chicio/ID3TagEditor")!
+                )
+                
+                AttributionRow(
+                    name: "LAME",
+                    role: "Optional external MP3 encoder used for downsampling when installed.",
+                    license: "LGPL",
+                    copyright: "Not bundled with this app.",
+                    url: URL(string: "https://lame.sourceforge.io/")!
+                )
+                
+                AttributionRow(
+                    name: "FFmpeg",
+                    role: "Optional external media tool used as a downsampling fallback when installed.",
+                    license: "LGPL/GPL depending on the installed build",
+                    copyright: "Not bundled with this app.",
+                    url: URL(string: "https://ffmpeg.org/")!
+                )
+            }
+        }
+        .padding(24)
+        .frame(width: 460)
+    }
+    
+    private var appVersionText: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String
+        let build = info?["CFBundleVersion"] as? String
+        
+        switch (version, build) {
+        case let (version?, build?) where version != build:
+            return "Version \(version) (\(build))"
+        case let (version?, _):
+            return "Version \(version)"
+        case let (_, build?):
+            return "Build \(build)"
+        default:
+            return "Version unavailable"
+        }
+    }
+}
+
+struct AttributionRow: View {
+    let name: String
+    let role: String
+    let license: String
+    let copyright: String
+    let url: URL
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(name)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                Spacer()
+                Link(destination: url) {
+                    Image(systemName: "arrow.up.right.square")
+                }
+                .buttonStyle(.borderless)
+                .help("Open project website")
+            }
+            
+            Text(role)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            
+            Text("\(license) • \(copyright)")
+                .font(.caption2)
+                .foregroundColor(.secondary.opacity(0.8))
+        }
+        .padding(10)
+        .background(Color(NSColor.controlBackgroundColor))
+        .cornerRadius(8)
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.2), lineWidth: 1))
+    }
+}

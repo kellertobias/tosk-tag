@@ -4,6 +4,25 @@ import ID3TagEditor
 import UniformTypeIdentifiers
 import AVFoundation
 
+private struct DownsampleRequest: Sendable {
+    let trackID: UUID
+    let inputURL: URL
+    let outputURL: URL
+    let bitrateKbps: Int
+}
+
+private enum DownsampleOutcome: Sendable {
+    case success(trackID: UUID, outputURL: URL)
+    case failure(Error)
+}
+
+private struct PreparedBakeFile: Sendable {
+    let trackID: UUID
+    let originalURL: URL
+    let workingURL: URL
+    let finalURL: URL
+}
+
 @MainActor
 class AppViewModel: ObservableObject {
     @Published var mode: AppMode = .audiobook {
@@ -276,7 +295,45 @@ class AppViewModel: ObservableObject {
         
         Task.detached {
             do {
+                let totalBakeSteps = currentTracks.count * (targetBitrateKbps == nil ? 1 : 2)
+                let downsampledURLs: [UUID: URL]
+                
+                if let targetBitrateKbps {
+                    downsampledURLs = try await Self.downsampleTracks(
+                        currentTracks,
+                        bitrateKbps: targetBitrateKbps
+                    ) { completedDownsamples, totalDownsamples in
+                        await MainActor.run {
+                            self.bakingProgress = Double(completedDownsamples) / Double(totalDownsamples + currentTracks.count)
+                        }
+                    }
+                } else {
+                    downsampledURLs = [:]
+                }
+                
+                let finalURLs = try Self.finalURLsByTrackID(
+                    for: currentTracks,
+                    rename: rename,
+                    formatStr: formatStr
+                )
+                try Self.validateFinalURLs(
+                    finalURLs,
+                    for: currentTracks,
+                    allowingBatchOriginalReplacements: true
+                )
+                var preparedFiles: [PreparedBakeFile] = []
+                preparedFiles.reserveCapacity(currentTracks.count)
+                var shouldCleanPreparedFiles = true
+                defer {
+                    if shouldCleanPreparedFiles {
+                        for preparedFile in preparedFiles {
+                            try? FileManager.default.removeItem(at: preparedFile.workingURL)
+                        }
+                    }
+                }
+                
                 let tagEditor = ID3TagEditor()
+                
                 for (index, track) in currentTracks.enumerated() {
                     let builder = ID32v3TagBuilder()
                     
@@ -307,64 +364,54 @@ class AppViewModel: ObservableObject {
                     
                     let tag = builder.build()
                     let originalURL = track.fileURL
-                    var workingURL = originalURL
-                    var temporaryURL: URL?
+                    let downsampledURL = downsampledURLs[track.id]
+                    let workingURL: URL
+                    let finalURL = finalURLs[track.id] ?? originalURL
                     
-                    if let targetBitrateKbps {
-                        guard originalURL.pathExtension.lowercased() == "mp3",
-                              let sourceBitrate = track.codecDetails.bitrateKbps,
-                              targetBitrateKbps < sourceBitrate else {
+                    if targetBitrateKbps != nil {
+                        guard let downsampledURL else {
                             throw AudioProcessingError.invalidDownsampleTarget(originalURL.lastPathComponent)
                         }
-                        
-                        let tempName = ".\(originalURL.deletingPathExtension().lastPathComponent)-\(UUID().uuidString).mp3"
-                        let tempURL = originalURL.deletingLastPathComponent().appendingPathComponent(tempName)
-                        try AudioTranscoder.downsampleMP3(inputURL: originalURL, outputURL: tempURL, bitrateKbps: targetBitrateKbps)
-                        workingURL = tempURL
-                        temporaryURL = tempURL
+                        workingURL = downsampledURL
+                    } else {
+                        workingURL = try Self.copyToTemporaryBakeFile(originalURL)
                     }
                     
                     try tagEditor.write(tag: tag, to: workingURL.path)
                     
-                    var finalURL = originalURL
-                    
-                    if rename {
-                        var cleanName = track.fileURL.deletingPathExtension().lastPathComponent
-                        if let range = cleanName.range(of: "^\\d+[\\s\\.-]*", options: .regularExpression) {
-                            cleanName.removeSubrange(range)
-                        }
-                        if cleanName.isEmpty { cleanName = "Track" }
-                        
-                        let newFilename = String(format: formatStr, track.trackNumber, cleanName)
-                        let newURL = track.fileURL.deletingLastPathComponent().appendingPathComponent(newFilename)
-                        
-                        finalURL = newURL
-                    }
-                    
-                    if let temporaryURL {
-                        if finalURL == originalURL {
-                            _ = try FileManager.default.replaceItemAt(originalURL, withItemAt: temporaryURL)
-                        } else {
-                            if FileManager.default.fileExists(atPath: finalURL.path) {
-                                throw AudioProcessingError.outputAlreadyExists(finalURL.lastPathComponent)
-                            }
-                            try FileManager.default.moveItem(at: temporaryURL, to: finalURL)
-                            try FileManager.default.removeItem(at: originalURL)
-                        }
-                    } else if finalURL != originalURL {
-                        try FileManager.default.moveItem(at: originalURL, to: finalURL)
-                    }
-                    
-                    let updatedCodecDetails = targetBitrateKbps == nil ? track.codecDetails : MP3Analyzer.analyze(url: finalURL)
+                    preparedFiles.append(PreparedBakeFile(
+                        trackID: track.id,
+                        originalURL: originalURL,
+                        workingURL: workingURL,
+                        finalURL: finalURL
+                    ))
                     
                     await MainActor.run {
-                        if finalURL != track.fileURL, let realIndex = self.tracks.firstIndex(where: { $0.id == track.id }) {
-                            self.tracks[realIndex].fileURL = finalURL
+                        let completedSteps = downsampledURLs.isEmpty ? index + 1 : currentTracks.count + index + 1
+                        self.bakingProgress = Double(completedSteps) / Double(totalBakeSteps)
+                    }
+                }
+                
+                try Self.commitPreparedBakeFiles(
+                    preparedFiles,
+                    preserveOriginals: false
+                )
+                shouldCleanPreparedFiles = false
+                
+                for preparedFile in preparedFiles {
+                    let updatedCodecDetails = targetBitrateKbps == nil
+                        ? currentTracks.first(where: { $0.id == preparedFile.trackID })?.codecDetails ?? .unknown
+                        : MP3Analyzer.analyze(url: preparedFile.finalURL)
+                    
+                    await MainActor.run {
+                        if preparedFile.finalURL != preparedFile.originalURL,
+                           let realIndex = self.tracks.firstIndex(where: { $0.id == preparedFile.trackID }) {
+                            self.tracks[realIndex].fileURL = preparedFile.finalURL
                         }
-                        if targetBitrateKbps != nil, let realIndex = self.tracks.firstIndex(where: { $0.id == track.id }) {
+                        if targetBitrateKbps != nil,
+                           let realIndex = self.tracks.firstIndex(where: { $0.id == preparedFile.trackID }) {
                             self.tracks[realIndex].codecDetails = updatedCodecDetails
                         }
-                        self.bakingProgress = Double(index + 1) / Double(currentTracks.count)
                     }
                 }
             } catch {
@@ -376,6 +423,220 @@ class AppViewModel: ObservableObject {
             await MainActor.run {
                 self.bakingProgress = nil
             }
+        }
+    }
+    
+    nonisolated private static func finalURLsByTrackID(
+        for tracks: [AudioTrack],
+        rename: Bool,
+        formatStr: String
+    ) throws -> [UUID: URL] {
+        return Dictionary(uniqueKeysWithValues: tracks.map { track in
+            let baseDirectory = track.fileURL.deletingLastPathComponent()
+            
+            let filename: String
+            if rename {
+                var cleanName = track.fileURL.deletingPathExtension().lastPathComponent
+                if let range = cleanName.range(of: "^\\d+[\\s\\.-]*", options: .regularExpression) {
+                    cleanName.removeSubrange(range)
+                }
+                if cleanName.isEmpty { cleanName = "Track" }
+                filename = String(format: formatStr, track.trackNumber, cleanName)
+            } else {
+                filename = track.fileURL.lastPathComponent
+            }
+            
+            let newURL = baseDirectory.appendingPathComponent(filename)
+            return (track.id, newURL)
+        })
+    }
+    
+    nonisolated private static func validateFinalURLs(
+        _ finalURLs: [UUID: URL],
+        for tracks: [AudioTrack],
+        allowingBatchOriginalReplacements: Bool
+    ) throws {
+        let originalPaths = Set(tracks.map { filePathKey($0.fileURL) })
+        var finalPaths: Set<String> = []
+        
+        for track in tracks {
+            let finalURL = finalURLs[track.id] ?? track.fileURL
+            let finalPath = filePathKey(finalURL)
+            
+            guard finalPaths.insert(finalPath).inserted else {
+                throw AudioProcessingError.outputAlreadyExists(finalURL.lastPathComponent)
+            }
+            
+            if finalURL != track.fileURL,
+               FileManager.default.fileExists(atPath: finalURL.path) {
+                if !allowingBatchOriginalReplacements || !originalPaths.contains(finalPath) {
+                    throw AudioProcessingError.outputAlreadyExists(finalURL.lastPathComponent)
+                }
+            }
+        }
+    }
+    
+    nonisolated private static func copyToTemporaryBakeFile(_ originalURL: URL) throws -> URL {
+        let tempName = "__TagEditorBake-\(UUID().uuidString)-\(originalURL.lastPathComponent)"
+        let tempURL = originalURL.deletingLastPathComponent().appendingPathComponent(tempName)
+        try FileManager.default.copyItem(at: originalURL, to: tempURL)
+        return tempURL
+    }
+    
+    nonisolated private static func commitPreparedBakeFiles(
+        _ preparedFiles: [PreparedBakeFile],
+        preserveOriginals: Bool
+    ) throws {
+        let fileManager = FileManager.default
+        var backups: [(originalURL: URL, backupURL: URL)] = []
+        var movedFinalURLs: [URL] = []
+        
+        func restoreBackups() {
+            for finalURL in movedFinalURLs.reversed() {
+                try? fileManager.removeItem(at: finalURL)
+            }
+            
+            for backup in backups.reversed() {
+                if !fileManager.fileExists(atPath: backup.originalURL.path),
+                   fileManager.fileExists(atPath: backup.backupURL.path) {
+                    try? fileManager.moveItem(at: backup.backupURL, to: backup.originalURL)
+                }
+            }
+        }
+        
+        do {
+            if !preserveOriginals {
+                for preparedFile in preparedFiles {
+                    let backupName = "__TagEditorBackup-\(UUID().uuidString)-\(preparedFile.originalURL.lastPathComponent)"
+                    let backupURL = preparedFile.originalURL.deletingLastPathComponent().appendingPathComponent(backupName)
+                    try fileManager.moveItem(at: preparedFile.originalURL, to: backupURL)
+                    backups.append((originalURL: preparedFile.originalURL, backupURL: backupURL))
+                }
+            }
+            
+            for preparedFile in preparedFiles {
+                let parentDirectory = preparedFile.finalURL.deletingLastPathComponent()
+                try fileManager.createDirectory(at: parentDirectory, withIntermediateDirectories: true)
+                if fileManager.fileExists(atPath: preparedFile.finalURL.path) {
+                    throw AudioProcessingError.outputAlreadyExists(preparedFile.finalURL.lastPathComponent)
+                }
+                try fileManager.moveItem(at: preparedFile.workingURL, to: preparedFile.finalURL)
+                try clearHiddenAttribute(at: preparedFile.finalURL)
+                movedFinalURLs.append(preparedFile.finalURL)
+            }
+            
+            for backup in backups {
+                try? fileManager.removeItem(at: backup.backupURL)
+            }
+        } catch {
+            restoreBackups()
+            for preparedFile in preparedFiles {
+                if fileManager.fileExists(atPath: preparedFile.workingURL.path) {
+                    try? fileManager.removeItem(at: preparedFile.workingURL)
+                }
+            }
+            throw error
+        }
+    }
+    
+    nonisolated private static func filePathKey(_ url: URL) -> String {
+        url.standardizedFileURL.path.lowercased()
+    }
+    
+    nonisolated private static func clearHiddenAttribute(at url: URL) throws {
+        var mutableURL = url
+        var resourceValues = URLResourceValues()
+        resourceValues.isHidden = false
+        try mutableURL.setResourceValues(resourceValues)
+    }
+    
+    nonisolated private static func downsampleTracks(
+        _ tracks: [AudioTrack],
+        bitrateKbps: Int,
+        progress: @Sendable @escaping (_ completed: Int, _ total: Int) async -> Void
+    ) async throws -> [UUID: URL] {
+        let requests = try tracks.map { track in
+            guard track.fileURL.pathExtension.lowercased() == "mp3",
+                  let sourceBitrate = track.codecDetails.bitrateKbps,
+                  bitrateKbps < sourceBitrate else {
+                throw AudioProcessingError.invalidDownsampleTarget(track.fileURL.lastPathComponent)
+            }
+            
+            let tempName = "__TagEditorDownsample-\(UUID().uuidString)-\(track.fileURL.lastPathComponent)"
+            let tempURL = track.fileURL.deletingLastPathComponent().appendingPathComponent(tempName)
+            return DownsampleRequest(
+                trackID: track.id,
+                inputURL: track.fileURL,
+                outputURL: tempURL,
+                bitrateKbps: bitrateKbps
+            )
+        }
+        
+        guard !requests.isEmpty else { return [:] }
+        
+        let workerCount = min(
+            requests.count,
+            max(2, ProcessInfo.processInfo.activeProcessorCount * 2)
+        )
+        var nextRequestIndex = 0
+        var completedCount = 0
+        var successfulOutputs: [UUID: URL] = [:]
+        var firstError: Error?
+        
+        await withTaskGroup(of: DownsampleOutcome.self) { group in
+            func enqueueNextRequest() {
+                guard nextRequestIndex < requests.count else { return }
+                let request = requests[nextRequestIndex]
+                nextRequestIndex += 1
+                group.addTask {
+                    performDownsample(request)
+                }
+            }
+            
+            for _ in 0..<workerCount {
+                enqueueNextRequest()
+            }
+            
+            while let outcome = await group.next() {
+                completedCount += 1
+                await progress(completedCount, requests.count)
+                
+                switch outcome {
+                case .success(let trackID, let outputURL):
+                    successfulOutputs[trackID] = outputURL
+                case .failure(let error):
+                    if firstError == nil {
+                        firstError = error
+                    }
+                }
+                
+                if firstError == nil {
+                    enqueueNextRequest()
+                }
+            }
+        }
+        
+        if let firstError {
+            for outputURL in successfulOutputs.values {
+                try? FileManager.default.removeItem(at: outputURL)
+            }
+            throw firstError
+        }
+        
+        return successfulOutputs
+    }
+    
+    nonisolated private static func performDownsample(_ request: DownsampleRequest) -> DownsampleOutcome {
+        do {
+            try AudioTranscoder.downsampleMP3(
+                inputURL: request.inputURL,
+                outputURL: request.outputURL,
+                bitrateKbps: request.bitrateKbps
+            )
+            return .success(trackID: request.trackID, outputURL: request.outputURL)
+        } catch {
+            try? FileManager.default.removeItem(at: request.outputURL)
+            return .failure(error)
         }
     }
     

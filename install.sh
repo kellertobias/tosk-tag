@@ -4,7 +4,7 @@ set -euo pipefail
 APP_NAME="Tobisk Tag Editor"
 BUNDLE_ID="com.keller.TobiskTagEditor"
 EXECUTABLE="TagEditor"
-VERSION="1.0"
+VERSION="1.2"
 MIN_OS="13.0"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

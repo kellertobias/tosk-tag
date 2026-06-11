@@ -24,5 +24,6 @@ scratch/
 crop.py
 
 # Credentials
+.env
 .netrc
 .repoinfo

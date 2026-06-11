@@ -4,7 +4,7 @@ set -euo pipefail
 APP_NAME="Tobisk Tag Editor"
 EXECUTABLE="TagEditor"
 BUNDLE_ID="${BUNDLE_ID:-de.tobisk.apps.tag-editor}"
-VERSION="${VERSION:-1.0}"
+VERSION="${VERSION:-1.2}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 MIN_OS="${MIN_OS:-13.0}"
 CONFIGURATION="${CONFIGURATION:-Release}"

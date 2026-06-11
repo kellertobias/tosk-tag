@@ -1,12 +1,12 @@
 import Foundation
 import SwiftUI
 
-enum AppMode: String, CaseIterable {
+enum AppMode: String, CaseIterable, Sendable {
     case audiobook = "Audiobook"
     case music = "Music"
 }
 
-struct AudioTrack: Identifiable, Hashable {
+struct AudioTrack: Identifiable, Hashable, Sendable {
     let id = UUID()
     var fileURL: URL
     var codecDetails: AudioCodecDetails = .unknown
@@ -35,7 +35,7 @@ struct AudioTrack: Identifiable, Hashable {
     }
 }
 
-struct AudioCodecDetails: Hashable {
+struct AudioCodecDetails: Hashable, Sendable {
     var channelDescription: String = "Unknown"
     var bitrateMode: String = "Unknown"
     var bitrateKbps: Int?
@@ -55,7 +55,7 @@ struct AudioCodecDetails: Hashable {
     }
 }
 
-struct GlobalMetadata {
+struct GlobalMetadata: Sendable {
     var coverImageData: Data?
     var albumTitle: String = ""
     var albumArtist: String = ""
