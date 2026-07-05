@@ -64,7 +64,8 @@ struct ContentView: View {
                             HStack {
                                 Text("\(track.trackNumber).")
                                     .foregroundColor(.secondary)
-                                    .frame(width: 24, alignment: .trailing)
+                                    .monospacedDigit()
+                                    .frame(width: 36, alignment: .trailing)
                                 Text(track.filename)
                                     .lineLimit(1)
                                 Spacer()
