@@ -1,28 +1,36 @@
-# Tobisk Tag Editor
+# Tosk Tag
 
-![Tobisk Tag Editor](Assets/hero.png)
+![Tosk Tag](Assets/hero.png)
 
-A sleek, native macOS application built with SwiftUI for bulk-editing MP3 metadata. 
+A native macOS SwiftUI app for bulk-editing MP3 metadata.
 
-**Tobisk Tag Editor** is designed to make organizing Audiobooks and Music albums effortless. Just drop your files, arrange them, and hit "Bake" to write ID3 tags directly to your files.
+Tosk Tag is designed for organizing audiobook chapters and music albums. Drop files or folders into the app, arrange tracks, preview audio, set global metadata, and bake ID3 tags directly into the MP3 files.
 
 ## Features
 
-- **Native macOS Experience:** Built entirely in Swift and SwiftUI for a blazing fast, native feel.
-- **Drag & Drop:** Drop multiple MP3s or whole folders to instantly load them.
-- **Smart Sorting:** Automatically sort files by natural naming conventions or their existing ID3 track numbers.
-- **Audiobook & Music Modes:** Specialized tagging modes depending on your media type. Maps Book Titles to ID3 Album, Chapter to ID3 Title, Narrator to ID3 Album Artist, and more.
-- **Bulk Apply:** Set global fields (like Cover Art, Album, Album Artist) that apply to all tracks, or use "Apply All" and "Set for Empty" on individual fields.
-- **Audio Preview:** Integrated audio player to listen to your tracks without leaving the app.
-- **Direct ID3 Baking:** Uses `ID3TagEditor` to securely write ID3v2.3 tags directly into your MP3 files.
+- Native SwiftUI macOS interface.
+- Drag-and-drop loading for MP3 files and folders.
+- Natural filename sorting and existing-track-number sorting.
+- Audiobook and music tagging modes.
+- Bulk fields for album, album artist, cover art, and other repeated values.
+- Apply-all and set-empty helpers for per-track fields.
+- Integrated audio preview.
+- Direct ID3v2.3 writing through `ID3TagEditor`.
+
+## Screenshots
+
+![Tosk Tag screenshot](screenshot.png)
 
 ## Building from Source
 
 This project uses Swift Package Manager.
 
-1. Clone the repository.
-2. Open the directory in Xcode or use `swift build` from the command line.
-3. Run the target.
+```sh
+swift build
+swift run TagEditor
+```
+
+You can also open the package directory in Xcode and run the `TagEditor` target.
 
 ## Signed macOS Build
 
@@ -32,9 +40,8 @@ Use the Xcode build script to create a signed app bundle:
 ./build-signed.sh --identity "Developer ID Application: Your Name (TEAMID)"
 ```
 
-The script builds the package with the Xcode Swift toolchain, packages
-`dist/Tobisk Tag Editor.app`, signs it with the bundle identifier
-`de.tobisk.apps.tag-editor`, verifies the signature, and creates a zip archive.
+The script builds the package with the Xcode Swift toolchain, packages `dist/Tobisk Tag Editor.app`, signs it with the bundle identifier `de.tobisk.apps.tag-editor`, verifies the signature, and creates a zip archive.
+
 For a local-only ad-hoc build, use:
 
 ```sh
@@ -46,3 +53,7 @@ To install the signed app into `/Applications` after building:
 ```sh
 ./build-signed.sh --identity "Developer ID Application: Your Name (TEAMID)" --install
 ```
+
+## License
+
+Tosk Tag is released under the MIT License. See [LICENSE](LICENSE).
