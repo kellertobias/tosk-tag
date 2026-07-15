@@ -21,6 +21,28 @@ Tosk Tag is designed for organizing audiobook chapters and music albums. Drop fi
 
 ![Tosk Tag screenshot](screenshot.png)
 
+## Install with Homebrew
+
+The bootstrap installer needs only macOS and an internet connection. It installs Homebrew when needed, lets Homebrew provision Apple's Swift build tools and the `lame` MP3 encoder, builds Tosk Tag from the latest source, and installs the app in `/Applications`:
+
+```sh
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/kellertobias/tosk-tag/main/install-homebrew.sh)"
+```
+
+To tap and install it manually on a system that already has Homebrew:
+
+```sh
+brew tap kellertobias/tosk-tag https://github.com/kellertobias/tosk-tag.git
+brew install --cask kellertobias/tosk-tag/tosk-tag
+```
+
+The cask builds from the current `main` branch. To rebuild and install the latest source later, run:
+
+```sh
+brew update
+brew reinstall --cask kellertobias/tosk-tag/tosk-tag
+```
+
 ## Building from Source
 
 This project uses Swift Package Manager.
