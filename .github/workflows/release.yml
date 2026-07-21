@@ -25,14 +25,25 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
     env:
-      # swift-testing (the `Testing` module) ships with Xcode, not the standalone toolchain.
-      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
       # Universal binary: runs on Apple Silicon and Intel.
       SWIFT_ARCHS: "arm64 x86_64"
     steps:
       - uses: actions/checkout@v4
+
+      # The package needs the Swift 6 toolchain (swift-tools-version 6.0). The runner's default
+      # Xcode can be older (Swift 5.10), so select the newest Xcode installed on the image and
+      # export it as DEVELOPER_DIR for every following step. swift-testing (the `Testing`
+      # module) also ships with Xcode, so tests build against it too.
+      - name: Select newest Xcode
+        run: |
+          set -euo pipefail
+          XCODE="$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1 || true)"
+          [ -n "$XCODE" ] || XCODE=/Applications/Xcode.app
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE"
+          echo "DEVELOPER_DIR=$XCODE/Contents/Developer" >> "$GITHUB_ENV"
 
       - name: Swift toolchain
         run: swift --version

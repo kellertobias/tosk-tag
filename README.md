@@ -101,7 +101,7 @@ mirror.
   `ToskTag-<version>-macos-universal.zip` asset and its SHA-256.
 
 A macOS app cannot be cross-compiled from Linux (the macOS SDK, SwiftUI, and `codesign` are
-Apple-only), so the build job runs on a `macos-14` runner. That runner is Apple Silicon but the
+Apple-only), so the build job runs on a `macos-15` runner. That runner is Apple Silicon but the
 build is **universal** (`arm64 + x86_64`, via `SWIFT_ARCHS`), so the release runs on both
 Apple Silicon and Intel Macs.
 
@@ -114,8 +114,9 @@ clear quarantine with `xattr -dr com.apple.quarantine "Tobisk Tag Editor.app"`.
 
 **Runner / secret requirements.** Forgejo needs only a Linux (`ubuntu-latest`) runner and a
 `SEMANTIC_RELEASE_TOKEN` secret with `contents: write` so the release job can push the commit
-and tag. GitHub needs a `macos-14` runner (GitHub-hosted provides one) with the full Xcode
-toolchain — the `Testing` module ships with Xcode — and uses the built-in `GITHUB_TOKEN`.
+and tag. GitHub needs a `macos-15` runner (GitHub-hosted provides one) with a Swift 6 Xcode —
+the workflow selects the newest installed Xcode, and the `Testing` module ships with it — and
+uses the built-in `GITHUB_TOKEN`.
 
 **First release (one-time baseline).** Automatic bumping needs a starting `v*` tag. Once the
 push mirror is live, create it from the current `VERSION`:
