@@ -1,0 +1,48 @@
+name: Release
+
+# Forgejo (the source of truth) performs only the semantic release: it determines the next
+# version from Conventional Commits and pushes a v* tag. It runs entirely on Linux and never
+# builds the macOS app. GitHub is a push mirror that reacts to the tag to build and publish the
+# release — see .github/workflows/release.yml.
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: https://code.forgejo.org/actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Needs write access to push the release commit and tag back to a protected main.
+          # Configure the SEMANTIC_RELEASE_TOKEN secret (contents: write).
+          token: ${{ secrets.SEMANTIC_RELEASE_TOKEN }}
+      - uses: https://code.forgejo.org/actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Determine next version from Conventional Commits
+        id: version
+        run: echo "value=$(node scripts/next-version.mjs)" >> "$GITHUB_OUTPUT"
+      - name: Tag and push the release
+        if: steps.version.outputs.value != ''
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+          git config user.name "Forgejo CI"
+          git config user.email "ci@tokenet.de"
+          node scripts/set-version.mjs "$VERSION"
+          git add -A
+          git commit -m "chore(release): v$VERSION [skip ci]"
+          git tag -a "v$VERSION" -m "v$VERSION"
+          git push origin HEAD:main
+          git push origin "v$VERSION"
+      - name: Report no release
+        if: steps.version.outputs.value == ''
+        run: echo "No release-worthy commits since the last tag."

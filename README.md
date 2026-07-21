@@ -89,12 +89,21 @@ version mapping is:
 | `docs:`, `test:`, `style:`, `refactor:`, `build:`, `ci:`, `chore:` | no release |
 
 **Where things run.** Forgejo (`git.tokenet.de`) is the source of truth; GitHub is a push
-mirror. On every push to `main`, [`.forgejo/workflows/ci.yml`](.forgejo/workflows/ci.yml) runs
-the Swift tests on an Apple Silicon `macos-14` runner, then — only when tests pass — determines
-the next version, bumps [`VERSION`](VERSION), commits `chore(release): vX.Y.Z [skip ci]`, and
-pushes a `vX.Y.Z` tag. The push mirror carries that tag to GitHub, where
-[`.github/workflows/release.yml`](.github/workflows/release.yml) builds the app on `macos-14`
-and publishes a GitHub Release with a `ToskTag-<version>-macos-arm64.zip` asset and its SHA-256.
+mirror.
+
+- On every push to `main`, [`.forgejo/workflows/release.yml`](.forgejo/workflows/release.yml)
+  performs the semantic release **on Linux only** (no macOS runner, no build): it determines
+  the next version from the commit history, bumps [`VERSION`](VERSION), commits
+  `chore(release): vX.Y.Z [skip ci]`, and pushes a `vX.Y.Z` tag.
+- The push mirror carries that tag to GitHub, where
+  [`.github/workflows/release.yml`](.github/workflows/release.yml) reacts to the tag, runs the
+  Swift tests, builds the app, and publishes a GitHub Release with a
+  `ToskTag-<version>-macos-universal.zip` asset and its SHA-256.
+
+A macOS app cannot be cross-compiled from Linux (the macOS SDK, SwiftUI, and `codesign` are
+Apple-only), so the build job runs on a `macos-14` runner. That runner is Apple Silicon but the
+build is **universal** (`arm64 + x86_64`, via `SWIFT_ARCHS`), so the release runs on both
+Apple Silicon and Intel Macs.
 
 **Version surface.** [`VERSION`](VERSION) is the single authoritative version; `./build` reads
 it to stamp `CFBundleShortVersionString`. Do not edit it by hand — the release job owns it.
@@ -103,10 +112,10 @@ it to stamp `CFBundleShortVersionString`. Do not edit it by hand — the release
 **not notarized**. Prefer the Homebrew cask (which builds from source). To run the release zip,
 clear quarantine with `xattr -dr com.apple.quarantine "Tobisk Tag Editor.app"`.
 
-**Runner / secret requirements.** Forgejo needs a `macos-14` runner with the full Xcode
-toolchain (the `Testing` module ships with Xcode) and a `SEMANTIC_RELEASE_TOKEN` secret with
-`contents: write` so the release job can push the commit and tag. GitHub uses the built-in
-`GITHUB_TOKEN`.
+**Runner / secret requirements.** Forgejo needs only a Linux (`ubuntu-latest`) runner and a
+`SEMANTIC_RELEASE_TOKEN` secret with `contents: write` so the release job can push the commit
+and tag. GitHub needs a `macos-14` runner (GitHub-hosted provides one) with the full Xcode
+toolchain — the `Testing` module ships with Xcode — and uses the built-in `GITHUB_TOKEN`.
 
 **First release (one-time baseline).** Automatic bumping needs a starting `v*` tag. Once the
 push mirror is live, create it from the current `VERSION`:

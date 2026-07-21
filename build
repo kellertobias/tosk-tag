@@ -55,6 +55,15 @@ INSTALL_DIR="${INSTALL_DIR:-/Applications/Weitere}"
 CODE_SIGN_IDENTITY="${CODE_SIGN_IDENTITY:--}"
 DISTRIBUTION_CERTIFICATE="${DISTRIBUTION_CERTIFICATE:-Developer ID Application}"
 
+# Optional cross-architecture build. Set SWIFT_ARCHS="arm64 x86_64" for a universal binary
+# that runs on both Apple Silicon and Intel. Empty means the host's native architecture.
+SWIFT_BUILD_ARCH_ARGS=()
+if [[ -n "${SWIFT_ARCHS:-}" ]]; then
+  for _arch in $SWIFT_ARCHS; do
+    SWIFT_BUILD_ARCH_ARGS+=(--arch "$_arch")
+  done
+fi
+
 usage() {
   cat <<USAGE
 Usage: ./build [setup|run|archive [install [path]]|install [path]|distribute|clean]
@@ -231,14 +240,14 @@ require_xcode() {
 swift_bin_path() {
   local configuration="$1"
 
-  swift build -c "$configuration" --show-bin-path
+  swift build -c "$configuration" ${SWIFT_BUILD_ARCH_ARGS[@]+"${SWIFT_BUILD_ARCH_ARGS[@]}"} --show-bin-path
 }
 
 build_swift() {
   local configuration="$1"
 
   require_xcode
-  swift build -c "$configuration"
+  swift build -c "$configuration" ${SWIFT_BUILD_ARCH_ARGS[@]+"${SWIFT_BUILD_ARCH_ARGS[@]}"}
 }
 
 write_info_plist() {

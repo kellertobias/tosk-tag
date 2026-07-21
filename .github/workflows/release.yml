@@ -1,8 +1,12 @@
 name: Release
 
 # GitHub is a push mirror of the Forgejo repository. The v* tag is created by the Forgejo
-# release job (see .forgejo/workflows/ci.yml) and mirrored here; this workflow reacts to it,
-# builds the macOS app on Apple Silicon, and publishes a GitHub Release with the artifact.
+# release job (see .forgejo/workflows/release.yml) and mirrored here; this workflow reacts to
+# it, tests and builds the macOS app, and publishes a GitHub Release with the artifact.
+#
+# A macOS app cannot be built in a Linux container (the macOS SDK, SwiftUI and codesign are
+# Apple-only), so this job requires a macOS runner. macos-14 is Apple Silicon and still emits a
+# universal (arm64 + x86_64) binary, so the release runs on both Intel and Apple Silicon Macs.
 #
 # The app is ad-hoc signed only (no Apple Developer account), so the release binary is not
 # notarized. Users install via Homebrew (builds from source) or clear quarantine manually.
@@ -21,10 +25,12 @@ concurrency:
 
 jobs:
   build:
-    # macos-14 is an Apple Silicon (arm64) runner.
     runs-on: macos-14
     env:
+      # swift-testing (the `Testing` module) ships with Xcode, not the standalone toolchain.
       DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+      # Universal binary: runs on Apple Silicon and Intel.
+      SWIFT_ARCHS: "arm64 x86_64"
     steps:
       - uses: actions/checkout@v4
 
@@ -35,7 +41,10 @@ jobs:
         id: v
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Build release app bundle (unsigned, ad-hoc)
+      - name: Test
+        run: swift test
+
+      - name: Build release app bundle (unsigned, ad-hoc, universal)
         run: ./build archive
 
       - name: Package archive
@@ -45,7 +54,8 @@ jobs:
         run: |
           set -euo pipefail
           APP=".build/archive/Tobisk Tag Editor.app"
-          OUT="ToskTag-${VERSION}-macos-arm64.zip"
+          echo "Architectures: $(lipo -archs "$APP/Contents/MacOS/TagEditor")"
+          OUT="ToskTag-${VERSION}-macos-universal.zip"
           ditto -c -k --keepParent "$APP" "$OUT"
           shasum -a 256 "$OUT" > "$OUT.sha256"
           echo "zip=$OUT" >> "$GITHUB_OUTPUT"
