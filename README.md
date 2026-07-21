@@ -94,7 +94,9 @@ mirror.
 - On every push to `main`, [`.forgejo/workflows/release.yml`](.forgejo/workflows/release.yml)
   performs the semantic release **on Linux only** (no macOS runner, no build): it determines
   the next version from the commit history, bumps [`VERSION`](VERSION), commits
-  `chore(release): vX.Y.Z [skip ci]`, and pushes a `vX.Y.Z` tag.
+  `chore(release): vX.Y.Z`, and pushes a `vX.Y.Z` tag. (The commit carries no `[skip ci]`
+  marker on purpose — the tag points at it, and GitHub honors `[skip ci]` on a tagged commit,
+  which would skip the mirrored build; the job guards against re-triggering itself instead.)
 - The push mirror carries that tag to GitHub, where
   [`.github/workflows/release.yml`](.github/workflows/release.yml) reacts to the tag, runs the
   Swift tests, builds the app, and publishes a GitHub Release with a
