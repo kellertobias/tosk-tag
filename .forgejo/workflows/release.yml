@@ -16,11 +16,10 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
-    # Skip the release commit this job pushes back to main, so it does not re-trigger itself.
-    # We deliberately do NOT use a "[skip ci]" marker: the v* tag points at the release commit,
-    # and GitHub Actions honors "[skip ci]" on a tagged commit, which would skip the mirrored
-    # build. (Even without this guard the run is a no-op, since next-version finds no new commits.)
-    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    # No "[skip ci]" marker on the release commit: the v* tag points at it, and GitHub honors
+    # "[skip ci]" on a tagged commit, which would skip the mirrored build. Re-triggering on the
+    # release commit is harmless and needs no guard — next-version finds no commits since the
+    # tag it just created and exits without releasing.
     steps:
       - uses: https://code.forgejo.org/actions/checkout@v4
         with:
