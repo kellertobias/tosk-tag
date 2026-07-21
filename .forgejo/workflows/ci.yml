@@ -1,0 +1,70 @@
+name: CI
+
+# Tests and semantic release live here on Forgejo (the source of truth). GitHub only
+# receives a push mirror and reacts to the pushed tag — see .github/workflows/release.yml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ forgejo.ref }}
+  cancel-in-progress: ${{ forgejo.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    runs-on: macos-14
+    env:
+      # swift-testing (the `Testing` module) ships with Xcode, not the standalone toolchain,
+      # so the release configuration and tests must build against the Xcode developer dir.
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+    steps:
+      - uses: https://code.forgejo.org/actions/checkout@v4
+      - name: Swift toolchain
+        run: swift --version
+      - name: Build (release)
+        run: swift build -c release
+      - name: Test
+        run: swift test
+
+  # Runs only on a trusted push to main, after tests pass. Determines the next version from
+  # Conventional Commits, bumps the VERSION file, commits, and creates + pushes the v* tag.
+  # The push mirror carries that tag to GitHub, which builds and publishes the release.
+  release:
+    needs: [test]
+    if: forgejo.ref == 'refs/heads/main' && forgejo.event_name == 'push'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-main
+      cancel-in-progress: false
+    steps:
+      - uses: https://code.forgejo.org/actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # A token with write access is required to push the release commit and tag back to
+          # a protected main branch. Configure the SEMANTIC_RELEASE_TOKEN secret (contents: write).
+          token: ${{ secrets.SEMANTIC_RELEASE_TOKEN }}
+      - uses: https://code.forgejo.org/actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Determine next version from Conventional Commits
+        id: version
+        run: echo "value=$(node scripts/next-version.mjs)" >> "$GITHUB_OUTPUT"
+      - name: Tag and push the release
+        if: steps.version.outputs.value != ''
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+          git config user.name "Forgejo CI"
+          git config user.email "ci@tokenet.de"
+          node scripts/set-version.mjs "$VERSION"
+          git add -A
+          git commit -m "chore(release): v$VERSION [skip ci]"
+          git tag -a "v$VERSION" -m "v$VERSION"
+          git push origin HEAD:main
+          git push origin "v$VERSION"
+      - name: Report no release
+        if: steps.version.outputs.value == ''
+        run: echo "No release-worthy commits since the last tag."

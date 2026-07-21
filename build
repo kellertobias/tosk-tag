@@ -8,6 +8,10 @@ PRODUCT_NAME="Tobisk Tag Editor"
 EXECUTABLE_NAME="TagEditor"
 APP_NAME="$PRODUCT_NAME.app"
 BUNDLE_ID="${BUNDLE_ID:-de.tobisk.apps.tag-editor}"
+VERSION_FILE="${VERSION_FILE:-$ROOT_DIR/VERSION}"
+if [[ -z "${VERSION:-}" && -f "$VERSION_FILE" ]]; then
+  VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
+fi
 VERSION="${VERSION:-1.2}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 MIN_OS="${MIN_OS:-13.0}"
