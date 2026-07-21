@@ -78,8 +78,13 @@ jobs:
           ZIP: ${{ steps.pkg.outputs.zip }}
         run: |
           set -euo pipefail
-          gh release create "$GITHUB_REF_NAME" \
-            "$ZIP" "$ZIP.sha256" \
-            --title "Tosk Tag v$VERSION" \
-            --generate-notes \
-            --verify-tag
+          # Idempotent: create the release, or refresh the assets if a re-run finds it exists.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$ZIP" "$ZIP.sha256" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              "$ZIP" "$ZIP.sha256" \
+              --title "Tosk Tag v$VERSION" \
+              --generate-notes \
+              --verify-tag
+          fi
